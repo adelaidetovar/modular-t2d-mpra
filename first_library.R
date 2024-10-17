@@ -1,10 +1,10 @@
-#####################
-### Main analysis ###
-#####################
+##############################
+### First library analysis ###
+##############################
 
-mpra_packages <- c("tidyverse", "factoextra", "data.table", "MPRAnalyze", "reshape2",
-                   "ggtext", "UpSetR", "patchwork", "bedtoolsr", "glmnet")
-lapply(mpra_packages, require, character.only=TRUE)
+librarian::shelf(tidyverse, factoextra, data.table, MPRAnalyze,
+                 reshape2, ggtext, UpSetR, patchwork, bedtoolsr,
+                 glmnet, GGally, mvtnorm)
 
 # mk work dir
 work_dir <- "/path/to/workdir/"
@@ -24,13 +24,53 @@ data_dir <- paste0(work_dir, "data/")
 # out dir
 out_dir <- paste0(work_dir, "output/")
 
+
+# functions
+rnaSum <- function(rna_df){
+  rna_df %>% mutate(sum_rep1 = rowSums(select(., ends_with("_rep1"))),
+                    sum_rep2 = rowSums(select(., ends_with("_rep2"))),
+                    sum_rep3 = rowSums(select(., ends_with("_rep3"))))
+}
+
+rnaLimit <- function(rnaSumA){
+  rbind(rnaSumA[,c(1,(length(rnaSumA[1,])-2):length(rnaSumA[1,]))])
+}
+
+dnaSum <- function(dna_df){
+  dna_df %>% mutate(sum_d = rowSums(across(2:length(dna_df[1,]))))
+}
+
+dnaLimit <- function(dnaSumA){
+  rbind(dnaSumA[,c(1,length(dnaSumA[1,]))])
+}
+
+mpraNorm <- function(df){
+  df %>%
+    mutate(dna_norm = sum_d/(sum(sum_d))*1000000) %>%
+    mutate_at(., vars(starts_with("sum")),
+              funs(norm = ./(sum(.))*1000000)) %>%
+    mutate_at(., vars(7:9),
+              funs(dna_norm = . / dna_norm))
+}
+
+getSigQuant <- function(df) {
+  df %>% mutate(fdr = p.adjust(df$pval.zscore, method = "BH"),
+                sig = case_when(fdr <= 0.05 ~ "fdr_05",
+                                fdr >= 0.05 & df$pval.zscore <= 0.05 ~ "nominal_sig",
+                                df$pval.zscore > 0.05 ~ "not_sig")) %>%
+    filter(fdr != 0)
+}
+
+getSigInserts <- function(df) {
+  rownames(df[df$sig=="fdr_05",])
+}
+
 #############################
 ### Make annotation files ###
 #############################
 
 # read in Yoshi's annotations
-
-oligo_annot <- read.delim(paste0(data_dir, 'oligo_annot.txt'))
+oligo_annot <- read.delim(paste0(data_dir, 'kyono_library_annotations.txt'))
 oligo_annot$basename <- gsub("_ref|_alt", "", oligo_annot$name)
 oligo_annot$allele_pair <- paste0(oligo_annot$proxyalt, oligo_annot$proxyref)
 
@@ -58,12 +98,12 @@ reg_annot <- reg_annot %>%
                           prom < enh ~ "Enhancer"),
         tss_rel_pos = ifelse(tss > 0, "Proximal", "Distal"))
 
-write.table(reg_annot, paste0(out_dir, "oligo_annot_plus_regulatoryinfo.txt"), sep = "\t",
+write.table(reg_annot, paste0(out_dir, "kyono_annot_plus_regulatoryinfo.txt"), sep = "\t",
             row.names = F, quote = F)
 
-############################
-### Variant-trait figure ###
-############################
+###########################
+### Variant-trait table ###
+###########################
 
 var_df <- oligo_annot %>%
   select(proxy_rsid, index_rsid, trait) %>%
@@ -90,58 +130,24 @@ var_tab %>% ggplot(aes(x = Type, y = Count, fill = Trait, label = paste(Trait, C
                   direction = "x",
                   hjust = 0)
 
-
-
-
-#########################
-### Initial data load ###
-#########################
-
-# Helper functions
-rnaSum <- function(rna_df){
-  rna_df %>% mutate(sum_rep1 = rowSums(select(., ends_with("_rep1"))),
-                    sum_rep2 = rowSums(select(., ends_with("_rep2"))),
-                    sum_rep3 = rowSums(select(., ends_with("_rep3"))))
-}
-
-rnaLimit <- function(rnaSumA){
-  rbind(rnaSumA[,c(1,(length(rnaSumA[1,])-2):length(rnaSumA[1,]))])
-}
-
-
-dnaSum <- function(dna_df){
-  dna_df %>% mutate(sum_d = rowSums(across(2:length(dna_df[1,]))))
-}
-
-
-dnaLimit <- function(dnaSumA){
-  rbind(dnaSumA[,c(1,length(dnaSumA[1,]))])
-}
-
-mpraNorm <- function(df){
-  df %>%
-    mutate(dna_norm = sum_d/(sum(sum_d))*1000000) %>%
-    mutate_at(., vars(starts_with("sum")),
-              funs(norm = ./(sum(.))*1000000)) %>%
-    mutate_at(., vars(7:9),
-              funs(dna_norm = . / dna_norm))
-}
+###################################################
+### Initial data load - from STARRseq pipeline  ###
+###################################################
 
 # RNA counts from MPRA
 rna_counts <- list()
-rna_counts[[3]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_SCP1_promoter_UP.minDNA10.minBarcode2.rna_counts.tsv'))
-rna_counts[[4]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_SCP1_promoter_dwn.minDNA10.minBarcode2.rna_counts.tsv'))
 rna_counts[[1]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_INS1_promoter_UP.minDNA10.minBarcode2.rna_counts.tsv'))
 rna_counts[[2]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_INS1_promoter_dwn.minDNA10.minBarcode2.rna_counts.tsv'))
+rna_counts[[3]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_SCP1_promoter_UP.minDNA10.minBarcode2.rna_counts.tsv'))
+rna_counts[[4]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_SCP1_promoter_dwn.minDNA10.minBarcode2.rna_counts.tsv'))
 names(rna_counts) <- c("UpINS","DwnINS","UpSCP1","DwnSCP1")
 
 # DNA counts from MPRA
-
 dna_counts <- list()
-dna_counts[[3]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_SCP1_promoter_UP.minDNA10.minBarcode2.dna_counts.tsv'))
-dna_counts[[4]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_SCP1_promoter_dwn.minDNA10.minBarcode2.dna_counts.tsv'))
 dna_counts[[1]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_INS1_promoter_UP.minDNA10.minBarcode2.dna_counts.tsv'))
 dna_counts[[2]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_INS1_promoter_dwn.minDNA10.minBarcode2.dna_counts.tsv'))
+dna_counts[[3]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_SCP1_promoter_UP.minDNA10.minBarcode2.dna_counts.tsv'))
+dna_counts[[4]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_SCP1_promoter_dwn.minDNA10.minBarcode2.dna_counts.tsv'))
 names(dna_counts) <- c("UpINS","DwnINS","UpSCP1","DwnSCP1")
 
 # Collect common inserts across all configurations
@@ -202,6 +208,14 @@ pca_counts$config <- c("INS-Up","INS-Up","INS-Up",
 
 # generate PCA for all counts
 res_pca <- prcomp(pca_counts[,c(1:11656)])
+pca_loadings <- as.data.frame(res_pca$rotation)
+top_pc1 <- pca_loadings %>%
+  arrange(-abs(PC1)) %>%
+  slice(1:50)
+
+top_pc2 <- pca_loadings %>%
+  arrange(-abs(PC2)) %>%
+  slice(1:50)
 
 pca_data = as.data.frame(res_pca$x)
 pca_data$indiv <- rownames(pca_data)
@@ -245,15 +259,179 @@ pca_plot <- ggplot(data=pca_data,aes(x = PC1,y=PC2,fill=interaction(config,promo
 ggsave(plot=pca_plot,filename=paste0(fig_dir,'pca_inserts_minDNA10.minBarcode2.png'),
         unit="in",width=4.5,height=4.5,dpi=600)
 
+# plot PCA correlogram with metadata
+####
+# check correlation btwn pcs and counts
+pca_df <- as.data.frame(res_pca$x)
+all_counts <- as.data.frame(t(pca_counts))
+
+pca_df$rna_prop <- 200000/pca_df$rna_count
+
+pca_df$rna_count <- c(sum(sum_rna[[1]]$sum_rep1), sum(sum_rna[[1]]$sum_rep2), sum(sum_rna[[1]]$sum_rep3),
+                      sum(sum_rna[[2]]$sum_rep1), sum(sum_rna[[2]]$sum_rep2), sum(sum_rna[[2]]$sum_rep3),
+                      sum(sum_rna[[3]]$sum_rep1), sum(sum_rna[[3]]$sum_rep2), sum(sum_rna[[3]]$sum_rep3),
+                      sum(sum_rna[[4]]$sum_rep1), sum(sum_rna[[4]]$sum_rep2), sum(sum_rna[[4]]$sum_rep3))
+pca_df$dna_count <- c(rep(sum(sum_dna[[1]]$sum_d),3),rep(sum(sum_dna[[2]]$sum_d),3),
+                      rep(sum(sum_dna[[3]]$sum_d),3),rep(sum(sum_dna[[4]]$sum_d),3),)
+pca_df$count_ratio <- log2(pca_df$rna_count/pca_df$dna_count)
+
+# Matrix of plots
+p1 <- ggpairs(pca_df[,c(1:5,13:15)], lower = list(continuous = wrap("points", alpha = 0.5)),
+              upper = list(continuous = wrap(ggally_cor, method = "spearman"))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size=8))
+# Correlation matrix plot
+p2 <- ggcorr(pca_df[,c(1:5,13:15)], label = TRUE, label_round = 2, method = c("everything","spearman"))
+
+g2 <- ggplotGrob(p2)
+colors <- g2$grobs[[6]]$children[[3]]$gp$fill
+colors <- c(colors[1:24],colors[27],colors[25:27]) # one color missing
+
+p <- 8
+# Change background color to tiles in the upper triangular matrix of plots 
+idx <- 1
+for (k1 in 1:(p-1)) {
+  for (k2 in (k1+1):p) {
+    plt <- getPlot(p1,k1,k2) +
+      theme(panel.background = element_rect(fill = colors[idx], color="white"),
+            panel.grid.major = element_line(color=colors[idx]))
+    p1 <- putPlot(p1,plt,k1,k2)
+    idx <- idx+1
+  }
+}
+
+png(filename = paste0(fig_dir, "pca_correlogram_spearman.png"),
+    units = "in", height = 6, width = 6, res = 600)
+p1
+dev.off()
+
+# regress out PC1/PC2 and replot PCA
+
+pheno <- data.frame(
+  config = pca_counts$config,
+  PC1 = pca_df$PC1,
+  PC2 = pca_df$PC2
+)
+
+clean_pca_counts <- as.data.frame(t(pca_counts[,c(1:11656)]))
+
+mod <- with(pheno, model.matrix(~ PC1))
+Hat <- solve(t(mod) %*% mod) %*% t(mod)
+ty <- t(clean_pca_counts)
+ty[is.na(ty)] <- 0
+beta <- (Hat %*% ty)
+cleany_pc1 <- clean_pca_counts - t(as.matrix(mod) %*% beta)
+
+mod <- with(pheno, model.matrix(~ PC2))
+Hat <- solve(t(mod) %*% mod) %*% t(mod)
+ty <- t(clean_pca_counts)
+ty[is.na(ty)] <- 0
+beta <- (Hat %*% ty)
+cleany_pc2 <- clean_pca_counts - t(as.matrix(mod) %*% beta)
+
+tcleany_pc1 <- as.data.frame(t(cleany_pc1))
+tcleany_pc2 <- as.data.frame(t(cleany_pc2))
+tcleany_pc1$config <- tcleany_pc2$config <- pheno$config
+
+
+clean_pc1_res <- prcomp(tcleany_pc1[,c(1:11656)])
+clean_pc2_res <- prcomp(tcleany_pc2[,c(1:11656)])
+
+autoplot(clean_pc1_res, data = tcleany_pc1, color = "config")
+autoplot(clean_pc2_res, data = tcleany_pc2, color = "config")
+
+pc1_data <- as.data.frame(clean_pc1_res$x)
+pc1_data$indiv <- rownames(pc1_data)
+
+# add metadata info
+promoter = c("INS","INS","INS","INS","INS","INS",
+             "SCP1","SCP1","SCP1","SCP1","SCP1","SCP1")
+config = c("Upstream","Upstream","Upstream",
+           "Downstream","Downstream","Downstream",
+           "Upstream","Upstream","Upstream",
+           "Downstream","Downstream","Downstream")
+indiv = rownames(pc1_data)
+col_data <- data.frame(config, promoter, indiv)
+
+# add plot labels to PCA df
+pc1_data$full_name <- paste(col_data$config, col_data$promoter, sep = " + ")
+ix_label <- c(1, 4, 7, 10)
+pc1_data$label <- ""
+pc1_data$label[ix_label] <- pc1_data$full_name[ix_label]
+
+# plot PCA
+pc1_data=merge(pc1_data,col_data)
+percent_var = round(100*(clean_pc1_res$sdev^2/sum(clean_pc1_res$sdev^2)),digits=2)
+pca_plot <- ggplot(data=pc1_data,aes(x = PC1,y=PC2,fill=interaction(config,promoter),
+                                     shape=config,label=label)) +
+  geom_point(size=3) +
+  scale_shape_manual(values=c(21,24),
+                     name="Insert Position") +
+  scale_fill_manual(values=c("#0072B2", "#56B4E9", "#E69F00", "#F0E442"),
+                    name="Promoter") +
+  geom_text_repel(family = "Helvetica", min.segment.length = 0,
+                  box.padding = 1) +
+  theme_linedraw(base_size=12,
+                 base_family = "Helvetica") +
+  theme(plot.title=element_text(hjust=0.5,face="bold"),
+        legend.position = "none") +
+  xlab(paste0("PC1: ", percent_var[1], "% variance")) +
+  ylab(paste0("PC2: ", percent_var[2], "% variance")) +
+  guides(fill = guide_legend(override.aes=list(shape=22,color=NA)))
+
+ggsave(plot=pca_plot,filename=paste0(fig_dir, "pca_plot_PC1.png"),
+       unit="in",width=4.5,height=4.5,dpi=600)
+
+pc2_data <- as.data.frame(clean_pc2_res$x)
+pc2_data$indiv <- rownames(pc2_data)
+
+# add metadata info
+promoter = c("INS","INS","INS","INS","INS","INS",
+             "SCP1","SCP1","SCP1","SCP1","SCP1","SCP1")
+config = c("Upstream","Upstream","Upstream",
+           "Downstream","Downstream","Downstream",
+           "Upstream","Upstream","Upstream",
+           "Downstream","Downstream","Downstream")
+indiv = rownames(pc2_data)
+col_data <- data.frame(config, promoter, indiv)
+
+# add plot labels to PCA df
+pc2_data$full_name <- paste(col_data$config, col_data$promoter, sep = " + ")
+ix_label <- c(1, 4, 7, 10)
+pc2_data$label <- ""
+pc2_data$label[ix_label] <- pc2_data$full_name[ix_label]
+
+# plot PCA
+pc2_data=merge(pc2_data,col_data)
+percent_var = round(100*(clean_pc2_res$sdev^2/sum(clean_pc2_res$sdev^2)),digits=2)
+pca_plot <- ggplot(data=pc2_data,aes(x = PC1,y=PC2,fill=interaction(config,promoter),
+                                     shape=config,label=label)) +
+  geom_point(size=3) +
+  scale_shape_manual(values=c(21,24),
+                     name="Insert Position") +
+  scale_fill_manual(values=c("#0072B2", "#56B4E9", "#E69F00", "#F0E442"),
+                    name="Promoter") +
+  geom_text_repel(family = "Helvetica", min.segment.length = 0,
+                  box.padding = 1) +
+  theme_linedraw(base_size=12,
+                 base_family = "Helvetica") +
+  theme(plot.title=element_text(hjust=0.5,face="bold"),
+        legend.position = "none") +
+  xlab(paste0("PC1: ", percent_var[1], "% variance")) +
+  ylab(paste0("PC2: ", percent_var[2], "% variance")) +
+  guides(fill = guide_legend(override.aes=list(shape=22,color=NA)))
+
+ggsave(plot=pca_plot,filename=paste0(fig_dir, "pca_plot_PC2.png"),
+       unit="in",width=4.5,height=4.5,dpi=600)
+
 ############
 ### ECDF ###
 ############
 
 indiv_res <- list()
-indiv_res[[3]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_SCP1_promoter_UP.minDNA10.minBarcode2.type_norm.mpra.tsv'))
-indiv_res[[4]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_SCP1_promoter_dwn.minDNA10.minBarcode2.type_norm.mpra.tsv'))
 indiv_res[[1]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_INS1_promoter_UP.minDNA10.minBarcode2.type_norm.mpra.tsv'))
 indiv_res[[2]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_INS1_promoter_dwn.minDNA10.minBarcode2.type_norm.mpra.tsv'))
+indiv_res[[3]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_SCP1_promoter_UP.minDNA10.minBarcode2.type_norm.mpra.tsv'))
+indiv_res[[4]] <- read.delim(paste0(data_dir, 'enh_and_oth_and_pro.config_SCP1_promoter_dwn.minDNA10.minBarcode2.type_norm.mpra.tsv'))
 names(indiv_res) <- c("UpINS","DwnINS","UpSCP1","DwnSCP1")
 indiv_res <- lapply(indiv_res, function(x) x %>%
          rownames_to_column(var = "refname") %>%
@@ -280,22 +458,18 @@ ecdf_plot <- ggplot(ec_df, aes(x = log2(value), color = variable)) +
 
 ggsave(plot = ecdf_plot, paste0(fig_dir, "ecdf.png"), units = "in", height = 5, width = 6)
 
+###############################
+### Calculating proportions ###
+###############################
+
+length(which(indiv_res[[1]]$pval.zscore<0.05))/length(indiv_res[[1]]$pval.zscore)
+length(which(indiv_res[[2]]$pval.zscore<0.05))/length(indiv_res[[2]]$pval.zscore)
+length(which(indiv_res[[3]]$pval.zscore<0.05))/length(indiv_res[[3]]$pval.zscore)
+length(which(indiv_res[[4]]$pval.zscore<0.05))/length(indiv_res[[4]]$pval.zscore)
+
 ###################
 ### UpSet plots ###
 ###################
-
-getSigQuant <- function(df) {
-  df %>% mutate(fdr = p.adjust(df$pval.zscore, method = "BH"),
-                sig = case_when(fdr <= 0.05 ~ "fdr_05",
-                                fdr >= 0.05 & df$pval.zscore <= 0.05 ~ "nominal_sig",
-                                df$pval.zscore > 0.05 ~ "not_sig")) %>%
-    filter(fdr != 0)
-}
-
-getSigInserts <- function(df) {
-  rownames(df[df$sig=="fdr_05",])
-}
-
 
 indiv_sig <- list()
 for (i in 1:4){
@@ -351,10 +525,10 @@ rna_annot[[2]]$pos <- rep("down",length(rna_annot[[2]][1]))
 rna_annot[[3]]$pos <- rep("up",length(rna_annot[[3]][1]))
 rna_annot[[4]]$pos <- rep("down",length(rna_annot[[4]][1]))
 
-rna_annot[[1]]$prom <- rep("SCP1",length(rna_annot[[1]][1]))
-rna_annot[[2]]$prom <- rep("SCP1",length(rna_annot[[2]][1]))
-rna_annot[[3]]$prom <- rep("INS",length(rna_annot[[3]][1]))
-rna_annot[[4]]$prom <- rep("INS",length(rna_annot[[4]][1]))
+rna_annot[[1]]$prom <- rep("INS",length(rna_annot[[1]][1]))
+rna_annot[[2]]$prom <- rep("INS",length(rna_annot[[2]][1]))
+rna_annot[[3]]$prom <- rep("SCP1",length(rna_annot[[3]][1]))
+rna_annot[[4]]$prom <- rep("SCP1",length(rna_annot[[4]][1]))
 
 # create joint identifier
 for (i in 1:4){
@@ -375,10 +549,10 @@ dna_annot[[2]]$pos <- rep("down",length(dna_annot[[2]][1]))
 dna_annot[[3]]$pos <- rep("up",length(dna_annot[[3]][1]))
 dna_annot[[4]]$pos <- rep("down",length(dna_annot[[4]][1]))
 
-dna_annot[[1]]$prom <- rep("SCP1",length(dna_annot[[1]][1]))
-dna_annot[[2]]$prom <- rep("SCP1",length(dna_annot[[2]][1]))
-dna_annot[[3]]$prom <- rep("INS",length(dna_annot[[3]][1]))
-dna_annot[[4]]$prom <- rep("INS",length(dna_annot[[4]][1]))
+dna_annot[[1]]$prom <- rep("INS",length(dna_annot[[1]][1]))
+dna_annot[[2]]$prom <- rep("INS",length(dna_annot[[2]][1]))
+dna_annot[[3]]$prom <- rep("SCP1",length(dna_annot[[3]][1]))
+dna_annot[[4]]$prom <- rep("SCP1",length(dna_annot[[4]][1]))
 
 for (i in 1:4){
   dna_annot[[i]]$bcnum_pos_prom <- paste(dna_annot[[i]]$bcnum,dna_annot[[i]]$pos,
@@ -427,10 +601,10 @@ rna_annot[,c(1:5)] <- lapply(rna_annot[,c(1:5)], factor)
 rna_annot$config <- paste(rna_annot$pos,rna_annot$prom, sep="_")
 dna_annot$config <- paste(dna_annot$pos,dna_annot$prom, sep="_")
 
-write.table(dna, paste0(out_dir, "combined.dna_counts.tsv"), sep="\t")
-write.table(rna, paste0(out_dir, "combined.rna_counts.tsv"), sep="\t")
-write.table(dna_annot, paste0(out_dir, "combined.dna_annots.tsv"), sep="\t")
-write.table(rna_annot, paste0(out_dir, "combined.rna_annots.tsv"), sep="\t")
+write.table(dna, paste0(out_dir, "combined.dna_counts.tsv"), sep="\t", row.names = F)
+write.table(rna, paste0(out_dir, "combined.rna_counts.tsv"), sep="\t", row.names = F)
+write.table(dna_annot, paste0(out_dir, "combined.dna_annots.tsv"), sep="\t", row.names = F)
+write.table(rna_annot, paste0(out_dir, "combined.rna_annots.tsv"), sep="\t", row.names = F)
 
 obj = MpraObject(dnaCounts = dna, rnaCounts = rna, dnaAnnot = dna_annot, rnaAnnot = rna_annot)
 obj <- estimateDepthFactors(obj, which.lib = "dna",
@@ -473,12 +647,17 @@ wald_plot_df <- wald_plot_df %>%
 # adjust levels of which significance they show
 wald_plot_df$sig <- factor(wald_plot_df$sig, levels = c("pos", "prom", "both","neither"))
 table(wald_plot_df$sig)
-# change shading of points based on significant level
+# change shading of points based on significance level
 wald_plot_df <- wald_plot_df %>%
   mutate(alpha = if_else(sig == "neither", FALSE, TRUE))
 
+# alter logFC just for plotting -- calculated at base e, should be base 2
+wald_plot_df <- wald_plot_df %>%
+  mutate(corrected_logFC.x = log2(exp(logFC.x)),
+         corrected_logFC.y = log2(exp(logFC.y)))
+
 # main scatter for wald plot
-wald_plot <- wald_plot_df %>% ggplot(aes(x = logFC.y, y = logFC.x, color = sig, alpha = alpha)) +
+wald_plot <- wald_plot_df %>% ggplot(aes(x = corrected_logFC.y, y = corrected_logFC.x, color = sig, alpha = alpha)) +
   geom_point(size = 1) + theme_linedraw(base_size = 14) +
   scale_alpha_discrete(range = c(0.1, 0.5), breaks = c(0.1, 0.5)) +
   scale_color_manual(values = c("#ffb14e", "#ea5f94", "#0000ff", "#e3e3e3"), name = "Significant\nEffect",
@@ -492,12 +671,12 @@ wald_plot <- wald_plot_df %>% ggplot(aes(x = logFC.y, y = logFC.x, color = sig, 
         text = element_text(family = "Helvetica")) +
   labs(x = expression("log"[2]*(FC)*","~"Promoter"), y = expression("log"[2]*(FC)*","~"Position"))
 
-wald_dens1 <- wald_plot_df %>% filter(sig.y == "fdr_05") %>% ggplot(aes(x = logFC.y)) +
+wald_dens1 <- wald_plot_df %>% filter(sig.y == "fdr_05") %>% ggplot(aes(x = corrected_logFC.y)) +
   geom_density(fill = "#ea5f94", alpha = 0.5) +
   theme_void() +
   theme(plot.margin = margin(0,0,0,0,unit="cm"))
 
-wald_dens2 <- wald_plot_df %>% filter(sig.x == "fdr_05") %>% ggplot(aes(x = logFC.x)) +
+wald_dens2 <- wald_plot_df %>% filter(sig.x == "fdr_05") %>% ggplot(aes(x = corrected_logFC.x)) +
   geom_density(fill = "#ffb14e", alpha = 0.5) +
   theme_void() +
   coord_flip() +
@@ -599,9 +778,9 @@ nonzero_coef1 <- coef_parsed1[coef_parsed1$coef != 0, ]
 nonzero_coef1 <- nonzero_coef1[order(nonzero_coef1$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed1, file=paste0(out_dir, "pos.lasso-zscore.full.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed1, file=paste0(out_dir, "pos.lasso-zscore.full.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef1, file=paste0(out_dir, "pos.lasso-zscore.full.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef1, file=paste0(out_dir, "pos.lasso-zscore.full.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef1, file=paste0(out_dir, "pos.lasso-zscore.full.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # pos full set - chrom state
@@ -639,9 +818,9 @@ nonzero_coef2 <- coef_parsed2[coef_parsed2$coef != 0, ]
 nonzero_coef2 <- nonzero_coef2[order(nonzero_coef2$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed2, file=paste0(out_dir, "pos.lasso-zscore.mid.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed2, file=paste0(out_dir, "pos.lasso-zscore.mid.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef2, file=paste0(out_dir, "pos.lasso-zscore.mid.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef2, file=paste0(out_dir, "pos.lasso-zscore.mid.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef2, file=paste0(out_dir, "pos.lasso-zscore.mid.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # pos red set
@@ -678,9 +857,9 @@ nonzero_coef3 <- coef_parsed3[coef_parsed3$coef != 0, ]
 nonzero_coef3 <- nonzero_coef3[order(nonzero_coef3$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed3, file=paste0(out_dir, "pos.lasso-zscore.red.coeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed3, file=paste0(out_dir, "pos.lasso-zscore.red.coeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef3, file=paste0(out_dir, "pos.lasso-zscore.red.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef3, file=paste0(out_dir, "pos.lasso-zscore.red.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef3, file=paste0(out_dir, "pos.lasso-zscore.red.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # prom full set + chrom state
@@ -717,9 +896,9 @@ nonzero_coef4 <- coef_parsed4[coef_parsed4$coef != 0, ]
 nonzero_coef4 <- nonzero_coef4[order(nonzero_coef4$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed4, file=paste0(out_dir, "prom.lasso-zscore.full.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed4, file=paste0(out_dir, "prom.lasso-zscore.full.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef4, file=paste0(out_dir, "prom.lasso-zscore.full.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef4, file=paste0(out_dir, "prom.lasso-zscore.full.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef4, file=paste0(out_dir, "prom.lasso-zscore.full.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # prom full set - chrom state
@@ -757,9 +936,9 @@ nonzero_coef5 <- coef_parsed5[coef_parsed5$coef != 0, ]
 nonzero_coef5 <- nonzero_coef5[order(nonzero_coef5$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed5, file=paste0(out_dir, "prom.lasso-zscore.mid.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed5, file=paste0(out_dir, "prom.lasso-zscore.mid.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef5, file=paste0(out_dir, "prom.lasso-zscore.mid.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef5, file=paste0(out_dir, "prom.lasso-zscore.mid.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef5, file=paste0(out_dir, "prom.lasso-zscore.mid.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # prom red set
@@ -796,9 +975,9 @@ nonzero_coef6 <- coef_parsed6[coef_parsed6$coef != 0, ]
 nonzero_coef6 <- nonzero_coef6[order(nonzero_coef6$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed6, file=paste0(out_dir, "prom.lasso-zscore.red.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed6, file=paste0(out_dir, "prom.lasso-zscore.red.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef6, file=paste0(out_dir, "prom.lasso-zscore.red.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef6, file=paste0(out_dir, "prom.lasso-zscore.red.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef6, file=paste0(out_dir, "prom.lasso-zscore.red.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ####
 # pos full set + chrom state - neg pval
@@ -835,9 +1014,9 @@ nonzero_coef7 <- coef_parsed7[coef_parsed7$coef != 0, ]
 nonzero_coef7 <- nonzero_coef7[order(nonzero_coef7$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed7, file=paste0(out_dir, "pos.lasso-zscore-negp.full.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed7, file=paste0(out_dir, "pos.lasso-zscore-negp.full.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef7, file=paste0(out_dir, "pos.lasso-zscore-negp.full.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef7, file=paste0(out_dir, "pos.lasso-zscore-negp.full.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef7, file=paste0(out_dir, "pos.lasso-zscore-negp.full.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # pos full set - chrom state
@@ -875,9 +1054,9 @@ nonzero_coef8 <- coef_parsed8[coef_parsed8$coef != 0, ]
 nonzero_coef8 <- nonzero_coef8[order(nonzero_coef8$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed8, file=paste0(out_dir, "pos.lasso-zscore-negp.mid.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed8, file=paste0(out_dir, "pos.lasso-zscore-negp.mid.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef8, file=paste0(out_dir, "pos.lasso-zscore-negp.mid.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef8, file=paste0(out_dir, "pos.lasso-zscore-negp.mid.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef8, file=paste0(out_dir, "pos.lasso-zscore-negp.mid.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # pos red set
@@ -914,9 +1093,9 @@ nonzero_coef9 <- coef_parsed9[coef_parsed9$coef != 0, ]
 nonzero_coef9 <- nonzero_coef9[order(nonzero_coef9$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed9, file=paste0(out_dir, "pos.lasso-zscore-negp.red.coeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed9, file=paste0(out_dir, "pos.lasso-zscore-negp.red.coeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef9, file=paste0(out_dir, "pos.lasso-zscore-negp.red.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef9, file=paste0(out_dir, "pos.lasso-zscore-negp.red.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef9, file=paste0(out_dir, "pos.lasso-zscore-negp.red.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # prom full set + chrom state
@@ -953,9 +1132,9 @@ nonzero_coef10 <- coef_parsed10[coef_parsed10$coef != 0, ]
 nonzero_coef10 <- nonzero_coef10[order(nonzero_coef10$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed10, file=paste0(out_dir, "prom.lasso-zscore-negp.full.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed10, file=paste0(out_dir, "prom.lasso-zscore-negp.full.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef10, file=paste0(out_dir, "prom.lasso-zscore-negp.full.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef10, file=paste0(out_dir, "prom.lasso-zscore-negp.full.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef10, file=paste0(out_dir, "prom.lasso-zscore-negp.full.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # prom full set - chrom state
@@ -993,9 +1172,9 @@ nonzero_coef11 <- coef_parsed11[coef_parsed11$coef != 0, ]
 nonzero_coef11 <- nonzero_coef11[order(nonzero_coef11$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed11, file=paste0(out_dir, "prom.lasso-zscore-negp.mid.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed11, file=paste0(out_dir, "prom.lasso-zscore-negp.mid.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef11, file=paste0(out_dir, "prom.lasso-zscore-negp.mid.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef11, file=paste0(out_dir, "prom.lasso-zscore-negp.mid.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef11, file=paste0(out_dir, "prom.lasso-zscore-negp.mid.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # prom red set
@@ -1032,9 +1211,9 @@ nonzero_coef12 <- coef_parsed12[coef_parsed12$coef != 0, ]
 nonzero_coef12 <- nonzero_coef12[order(nonzero_coef12$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed12, file=paste0(out_dir, "prom.lasso-zscore-negp.red.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed12, file=paste0(out_dir, "prom.lasso-zscore-negp.red.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef12, file=paste0(out_dir, "prom.lasso-zscore-negp.red.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef12, file=paste0(out_dir, "prom.lasso-zscore-negp.red.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef12, file=paste0(out_dir, "prom.lasso-zscore-negp.red.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # pos red set + chrom states
@@ -1071,9 +1250,9 @@ nonzero_coef13 <- coef_parsed13[coef_parsed13$coef != 0, ]
 nonzero_coef13 <- nonzero_coef13[order(nonzero_coef13$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed13, file=paste0(out_dir, "pos.lasso-zscore.redchrom.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed13, file=paste0(out_dir, "pos.lasso-zscore.redchrom.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef13, file=paste0(out_dir, "pos.lasso-zscore.redchrom.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef13, file=paste0(out_dir, "pos.lasso-zscore.redchrom.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef13, file=paste0(out_dir, "pos.lasso-zscore.redchrom.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # prom red set + chrom states
@@ -1110,9 +1289,9 @@ nonzero_coef14 <- coef_parsed14[coef_parsed14$coef != 0, ]
 nonzero_coef14 <- nonzero_coef14[order(nonzero_coef14$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed14, file=paste0(out_dir, "prom.lasso-zscore.redchrom.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed14, file=paste0(out_dir, "prom.lasso-zscore.redchrom.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef14, file=paste0(out_dir, "prom.lasso-zscore.redchrom.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef14, file=paste0(out_dir, "prom.lasso-zscore.redchrom.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef14, file=paste0(out_dir, "prom.lasso-zscore.redchrom.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # pos red set + chrom states
@@ -1149,9 +1328,9 @@ nonzero_coef15 <- coef_parsed15[coef_parsed15$coef != 0, ]
 nonzero_coef15 <- nonzero_coef15[order(nonzero_coef15$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed15, file=paste0(out_dir, "pos.lasso-zscore-negp.redchrom.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed15, file=paste0(out_dir, "pos.lasso-zscore-negp.redchrom.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef15, file=paste0(out_dir, "pos.lasso-zscore-negp.redchrom.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef15, file=paste0(out_dir, "pos.lasso-zscore-negp.redchrom.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef15, file=paste0(out_dir, "pos.lasso-zscore-negp.redchrom.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 ###
 # prom red set + chrom states
@@ -1188,9 +1367,9 @@ nonzero_coef16 <- coef_parsed16[coef_parsed16$coef != 0, ]
 nonzero_coef16 <- nonzero_coef16[order(nonzero_coef16$coef, decreasing=TRUE), ]
 
 # create final output
-write.table(coef_parsed16, file=paste0(out_dir, "prom.lasso-zscore-negp.redchrom.finalcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(coef_parsed16, file=paste0(out_dir, "prom.lasso-zscore-negp.redchrom.finalcoeff.tsv"), sep='\t', row.names=FALSE)
 write.table(nonzero_coef16, file=paste0(out_dir, "prom.lasso-zscore-negp.redchrom.nonzerocoeff.tsv"), sep='\t', row.names=FALSE)
-write.table(all_coef16, file=paste0(out_dir, "prom.lasso-zscore-negp.redchrom.allcoeff.tsv"), sep='\t', row.names=FALSE)
+# write.table(all_coef16, file=paste0(out_dir, "prom.lasso-zscore-negp.redchrom.allcoeff.tsv"), sep='\t', row.names=FALSE)
 
 # plot LASSO results
 tf_info = read.table("/home/albanus/data/motifs/motif_library_information/pwmInfo.dat", header = T,row.names = NULL, fill = T)
@@ -1311,237 +1490,3 @@ prom_rc_plot <- prom_rc_df %>% arrange(marks, coef) %>% mutate(abs_coef = abs(co
 ggsave(prom_rc_plot,
        filename = paste0(fig_dir, "prom_rc_plot.png"), units = "in",
        height = 4, width = 3)
-
-
-############################
-### Second MPRA - 832/13 ###
-############################
-
-# read in dictionaries
-adPath = paste0(data_dir, 'ADIPOQ.txt')
-apPath = paste0(data_dir, 'APOA2.txt')
-inPath = paste0(data_dir, 'INS.txt')
-myPath = paste0(data_dir, 'MYBPC2.txt')
-miPath = paste0(data_dir, 'minP.txt')
-scPath = paste0(data_dir, 'SCP1.txt')
-
-adSA = fread(adPath)
-apSA = fread(apPath)
-inSA = fread(inPath)
-mySA = fread(myPath)
-miSA = fread(miPath)
-scSA = fread(scPath)
-
-# reduce and remove duplicates
-adSA <- adSA %>% distinct(readgroupid, refname)
-apSA <- apSA %>% distinct(readgroupid, refname)
-inSA <- inSA %>% distinct(readgroupid, refname)
-mySA <- mySA %>% distinct(readgroupid, refname)
-miSA <- miSA %>% distinct(readgroupid, refname)
-scSA <- scSA %>% distinct(readgroupid, refname)
-
-adSA$prom = "ADIPOQ"
-apSA$prom = "APOA2"
-inSA$prom = "INS"
-mySA$prom = "MYBPC2"
-miSA$prom = "minP"
-scSA$prom = "SCP1"
-
-subassembly = bind_rows(list(adSA, apSA, inSA, mySA, miSA, scSA))
-rm(mySA)
-rm(scSA)
-rm(adSA)
-rm(apSA)
-rm(inSA)
-rm(miSA)
-
-# read in counts
-countsPath = paste0(data_dir, '832_count_table.txt')
-
-oligoCounts = fread(countsPath)
-
-fullCounts = merge(oligoCounts, subassembly[,c(1,4,5)], by = "V1")
-rm(oligoCounts)
-rm(subassembly)
-fullCounts$oligo_id <- substr(fullCounts$refname, 1, nchar(fullCounts$refname)-6)
-
-oligonames <- read.delim(paste0(data_dir, "oligonames.tsv"))
-oligonames$allele <- substr(oligonames$full_name, nchar(oligonames$full_name), nchar(oligonames$full_name))
-
-formatCounts = merge(fullCounts, oligonames, by = "oligo_id")
-
-colnames(formatCounts)[3:8] <- c("rna1", "rna2", "rna3", "rna4", "rna5", "dna")
-
-sumCounts <- formatCounts %>%
-  group_by(oligo_id, prom) %>%
-  summarize(oligo_id = oligo_id,
-            rna1 = sum(rna1),
-            rna2 = sum(rna2),
-            rna3 = sum(rna3),
-            rna4 = sum(rna4),
-            rna5 = sum(rna5),
-            dna = sum(dna),
-            base_name = base_name,
-            prom = prom) %>%
-  distinct(base_name, .keep_all = TRUE)
-
-# filter for rows where all have at least 5 counts
-filtSumCounts <- sumCounts %>% filter(rna1 > 5 & rna2 > 5 & rna3 > 5 & rna4 > 5 & rna5 > 5 & dna > 5)
-
-# make design matrix
-design = data.frame("material" = c(rep("RNA",5),rep("DNA",1)))
-design$replicate = c("cDNA1","cDNA2","cDNA3","cDNA4","cDNA5","plasmid1")
-rownames(design) = names(filtSumCounts)[3:8]
-
-# build and execute DESeq2 call and retrieve summary statistics
-deseq_object = DESeqDataSetFromMatrix(countData=filtSumCounts[3:8],
-                                      colData = design,
-                                      design = ~material)
-deseq_object =  DESeq(deseq_object, fitType = 'local', minReplicatesForReplace=Inf)
-
-# format contrasts, then bind into final dataframe
-results_material = results(deseq_object, contrast = c("material","RNA","DNA"),
-                           cooksCutoff = FALSE, independentFiltering = FALSE)
-names(results_material) = paste0(names(results_material),"_", "expr")
-
-results_DESeq2 = cbind(filtSumCounts, as.data.frame(results_material))
-
-write.table(results_DESeq2, paste0(out_dir, "832-lib2-expr-filt.tsv"), sep = "\t", quote = F, row.names = F, col.names = T)
-
-# now perform allelic analysis with linear contrast
-design_contrast = data.frame("material" = factor(rep(c(rep("RNA",5),rep("DNA",1)),2)),
-                             "allele" = factor(c(rep("ref",6),rep("alt",6))),
-                             "sample" = factor(rep(c("cDNA1","cDNA2","cDNA3","cDNA4","cDNA5","plasmid1"),2)),
-                             "dnaAllele" = c(0,0,0,0,0,0,0,0,0,0,0,1),
-                             "rnaAllele" = c(0,0,0,0,0,0,1,1,1,1,1,0))
-rownames(design_contrast) = names(allelicCounts)[3:14]
-
-deseq_object_contrast = DESeqDataSetFromMatrix(countData=allelicCounts[,3:14],
-                                               colData = design_contrast,
-                                               design = ~0 + sample + dnaAllele + rnaAllele)
-deseq_object_contrast = DESeq(deseq_object_contrast)
-
-results_expr_contrast = results(deseq_object_contrast, contrast = list(c("samplecDNA1", "samplecDNA2","samplecDNA3",
-                                                                         "samplecDNA4","samplecDNA5"),
-                                                                       c("sampleplasmid1")))
-results_allele_contrast = results(deseq_object_contrast, contrast = list("dnaAllele","rnaAllele"))
-
-names(results_expr_contrast) = paste0(names(results_expr_contrast),"_", "expr")
-names(results_allele_contrast) = paste0(names(results_allele_contrast),"_", "allele")
-
-results_DESeq2_contrast = cbind(allelicCounts,
-                                as.data.frame(results_expr_contrast),
-                                as.data.frame(results_allele_contrast))
-
-write.table(out_dir, paste0(out_dir, "832-lib2-allelic-filt.tsv"), quote = F, sep = '\t', row.names = F, col.names = T)
-
-#############################
-### Second MPRA - LHCN-M2 ###
-#############################
-
-# read in dictionaries
-inPath = paste0(data_dir, 'INS.txt')
-myPath = paste0(data_dir, 'MYBPC2.txt')
-scPath = paste0(data_dir, 'SCP1.txt')
-
-inSA = fread(inPath)
-mySA = fread(myPath)
-scSA = fread(scPath)
-
-# reduce and remove duplicates
-inSA <- inSA %>% distinct(readgroupid, refname)
-mySA <- mySA %>% distinct(readgroupid, refname)
-scSA <- scSA %>% distinct(readgroupid, refname)
-
-inSA$prom = "INS"
-mySA$prom = "MYBPC2"
-scSA$prom = "SCP1"
-
-subassembly = bind_rows(list(inSA, mySA, scSA))
-rm(mySA)
-rm(scSA)
-rm(inSA)
-
-# read in counts
-countsPath = paste0(data_dir, 'lhcn_count_table.txt')
-
-oligoCounts = fread(countsPath)
-
-fullCounts = merge(oligoCounts[,c(1:5,18:21)], subassembly[,c(1,4,5)], by = "V1")
-rm(oligoCounts)
-rm(subassembly)
-fullCounts$oligo_id <- substr(fullCounts$refname, 1, nchar(fullCounts$refname)-6)
-
-oligonames <- read.delim(paste0(data_dir, "oligonames.tsv"))
-oligonames$allele <- substr(oligonames$full_name, nchar(oligonames$full_name), nchar(oligonames$full_name))
-
-formatCounts = merge(fullCounts, oligonames, by = "oligo_id")
-
-colnames(formatCounts)[3:10] <- c("rna1", "rna2", "rna3", "rna4", "dna1", "dna2", "dna3", "dna4")
-
-sumCounts <- formatCounts %>%
-  group_by(oligo_id, prom) %>%
-  summarize(oligo_id = oligo_id,
-            rna1 = sum(rna1),
-            rna2 = sum(rna2),
-            rna3 = sum(rna3),
-            rna4 = sum(rna4),
-            dna1 = sum(dna1),
-            dna2 = sum(dna2),
-            dna3 = sum(dna3),
-            dna4 = sum(dna4),
-            base_name = base_name,
-            prom = prom) %>%
-  distinct(base_name, .keep_all = TRUE)
-
-# filter for rows where all have at least 5 counts
-filtSumCounts <- sumCounts %>% filter(rna1 > 5 & rna2 > 5 & rna3 > 5 & rna4 > 5 &
-                                        dna1 > 5 & dna2 > 5 & dna3 > 5 & dna4 > 5)
-
-# make design matrix
-design = data.frame("material" = c(rep("RNA",4),rep("DNA",4)))
-design$replicate = c("cDNA1","cDNA2","cDNA3","cDNA4","gDNA1","gDNA2","gDNA3","gDNA4")
-rownames(design) = names(filtSumCounts)[3:10]
-
-# build and execute DESeq2 call and retrieve summary statistics
-deseq_object = DESeqDataSetFromMatrix(countData=filtSumCounts[3:10],
-                                      colData = design,
-                                      design = ~material)
-deseq_object =  DESeq(deseq_object, fitType = 'local', minReplicatesForReplace=Inf)
-
-# format contrasts, then bind into final dataframe
-results_material = results(deseq_object, contrast = c("material","RNA","DNA"),
-                           cooksCutoff = FALSE, independentFiltering = FALSE)
-names(results_material) = paste0(names(results_material),"_", "expr")
-
-results_DESeq2 = cbind(filtSumCounts, as.data.frame(results_material))
-
-write.table(results_DESeq2, paste0(out_dir, "lhcn-lib2-expr-filt.tsv"), sep = "\t", quote = F, row.names = F, col.names = T)
-
-# now perform allelic analysis with linear contrast
-design_contrast = data.frame("material" = factor(rep(c(rep("RNA",5),rep("DNA",1)),2)),
-                             "allele" = factor(c(rep("ref",6),rep("alt",6))),
-                             "sample" = factor(rep(c("cDNA1","cDNA2","cDNA3","cDNA4","cDNA5","plasmid1"),2)),
-                             "dnaAllele" = c(0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1),
-                             "rnaAllele" = c(0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0))
-rownames(design_contrast) = names(allelicCounts)[3:18]
-
-deseq_object_contrast = DESeqDataSetFromMatrix(countData=allelicCounts[,3:18],
-                                               colData = design_contrast,
-                                               design = ~0 + sample + dnaAllele + rnaAllele)
-deseq_object_contrast = DESeq(deseq_object_contrast)
-
-results_expr_contrast = results(deseq_object_contrast, contrast = list(c("samplecDNA1", "samplecDNA2","samplecDNA3",
-                                                                         "samplecDNA4"),
-                                                                       c("samplegDNA1", "samplegDNA2","samplegDNA3",
-                                                                         "samplegDNA4")))
-results_allele_contrast = results(deseq_object_contrast, contrast = list("dnaAllele","rnaAllele"))
-
-names(results_expr_contrast) = paste0(names(results_expr_contrast),"_", "expr")
-names(results_allele_contrast) = paste0(names(results_allele_contrast),"_", "allele")
-
-results_DESeq2_contrast = cbind(allelicCounts,
-                                as.data.frame(results_expr_contrast),
-                                as.data.frame(results_allele_contrast))
-
-write.table(out_dir, paste0(out_dir, "lhcn-lib2-allelic-filt.tsv"), quote = F, sep = '\t', row.names = F, col.names = T)
