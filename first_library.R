@@ -481,20 +481,128 @@ list_sig <- list(UpINS = getSigInserts(indiv_sig[[1]]),
                  UpSCP1 = getSigInserts(indiv_sig[[3]]),
                  DownSCP1 = getSigInserts(indiv_sig[[4]]))
 
-upset_plot <- upset(fromList(list_sig), sets = c("UpSCP1","DownSCP1","UpINS", "DownINS"),
-                    keep.order = TRUE, set_size.scale_max = 8500, set_size.show = TRUE,
-                    sets.bar.color = c("#F0E442", "#E69F00", "#56B4E9", "#0072B2"),
-                    text.scale = 1.75,
-                    point.size = 2.8,
-                    line.size = 1)
+all_sig <- Reduce(union, list(list_sig[[1]],
+                              list_sig[[2]],
+                              list_sig[[3]],
+                              list_sig[[4]]))
 
-# change ratio of plot grid to prevent labels from cutting off
-upset_plot$mb.ratio <- c(0.6, 0.4)
+sig_one <- all_sig %in% list_sig[[1]]
+sig_two <- all_sig %in% list_sig[[2]]
+sig_three <- all_sig %in% list_sig[[3]]
+sig_four <- all_sig %in% list_sig[[4]]
 
-png(filename = paste0(fig_dir, "upset_plot.png"),
-    width = 12.5, height = 5, units = "in", res = 300)
-upset_plot
-dev.off()
+sig_df = as.data.frame(cbind(sig_four, sig_three, sig_two, sig_one))
+rownames(sig_df) = all_sig
+colnames(sig_df) = c("A","B","C","D") # corresponds top DownSCP1, UpSCP1, DownINS, UpINS, in that order
+
+sig_df_upset <- upset(sig_df,
+                      intersect = c("A", "B",
+                                    "C", "D"),
+                      base_annotations = list(
+                        'Intersection Size' = intersection_size(
+                          counts = FALSE,
+                          text = list(size = 5)
+                        )
+                      ),
+                      queries = list(
+                        upset_query(set = "A", fill = "#0072B2"),
+                        upset_query(set = "B", fill = "#56B4E9"),
+                        upset_query(set = "C", fill = "#E69F00"),
+                        upset_query(set = "D", fill = "#F0E442")
+                      ),
+                      themes = upset_default_themes(
+                        text = element_text(family = "Helvetica", size = 15)
+                      ),
+                      sort_sets = FALSE)
+
+intersect_df <- as.data.frame(table(factor(sig_df_upset[[2]]$data$intersection)))
+
+intersect_totals <- intersect_df %>%
+  group_by(Var1) %>%
+  summarize(total = sum(Freq)) %>%
+  mutate(percent = round(((total*100)/11656), digits = 2),
+         label = paste0(total, "\n", percent, "%"))
+
+intersect_df <- intersect_df %>%
+  left_join(intersect_totals, by = "Var1")
+intersect_bar <- intersect_df %>%
+  mutate(condition = case_when(Var1 == 2 ~ "UpSCP",
+                               Var1 == 1 ~ "DownSCP",
+                               Var1 == 4 ~ "UpINS",
+                               Var1 == 3 ~ "DownINS",
+                               TRUE ~ "other"),
+         condition = factor(condition, levels = c("UpSCP", "DownSCP", "UpINS", "DownINS", "other")),
+         Var1 = reorder(Var1, -Freq)) %>%
+  ggplot(aes(x = Var1, y = Freq, fill = condition)) +
+  geom_bar(stat = "identity", linewidth = 0.25, color = "black") +
+  geom_text(aes(label = paste0(total, "\n(", percent, "%", ")"), 
+                y = total + 200),
+            size = 4, family = "Helvetica",
+            angle = 45, lineheight = 0.75) +
+  scale_fill_manual(values = c("#F0E442",
+                               "#E69F00",
+                               "#56B4E9",
+                               "#0072B2",
+                               "#8E8E8E")) +
+  theme_minimal(base_family = "Helvetica", base_size = 14) +
+  theme(legend.position = "none",
+        axis.text.x = element_blank(),
+        axis.title.y = element_text(color = "black", size = 14),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        plot.margin = margin(0,0,0,0,"pt")) +
+  labs(x = NULL, y = "Intersection Size") + coord_cartesian(clip = "off")
+
+intersection_order <- levels(reorder(intersect_df$Var1, -intersect_df$Freq))
+replace_intersect <- c("3" = "DownINS", "4" = "UpINS",
+                       "1" = "DownSCP", "2" = "UpSCP")
+intersection_order <- as.factor(gsub("3", "DownINS",
+                                     gsub("4", "UpINS",
+                                          gsub("1", "DownSCP",
+                                               gsub("2", "UpSCP", intersection_order)))))
+intersection_order <- factor(intersection_order, levels = intersection_order)
+
+sig_mat <- sig_df_upset[[4]]$data %>%
+  mutate(start = str_sub(as.character(intersection), 1, 1),
+         end = str_sub(as.character(intersection), nchar(as.character(intersection)), nchar(as.character(intersection))),
+         intersection_recode = str_replace_all(intersection, replace_intersect),
+         condition = case_when(!(intersection_recode %in% c("UpINS", "DownINS","UpSCP", "DownSCP")) ~ "other",
+                               TRUE ~ intersection_recode),
+         condition = factor(condition, levels = c("DownSCP", "UpSCP", "DownINS", "UpINS")),
+         group = str_replace_all(group, replace_intersect),
+         group = factor(group, levels = c("DownSCP", "UpSCP", "DownINS", "UpINS")),
+         start = str_replace_all(start, replace_intersect),
+         end = str_replace_all(end, replace_intersect),
+         intersection_recode = factor(intersection_recode, levels = intersection_order)) %>%
+  ggplot(aes(x = intersection_recode, y = group, fill = condition,
+             size = value)) +
+  geom_point(fill = "#E4E4E2", color = "#C0C0C0", size = 4, pch = 21, stroke = 0.5) +
+  geom_segment(aes(x = intersection_recode, xend = intersection_recode, y = start, yend = end),
+               linewidth = 0.75) +
+  geom_point(aes(stroke = value * 0.75), pch = 21) + scale_fill_manual(values = c("#E69F00",
+                                                                                  "#F0E442",
+                                                                                  "#0072B2",
+                                                                                  "#56B4E9",
+                                                                                  "#000000")) +
+  scale_size_manual(values = c(0, 5)) + theme_minimal(base_family = "Helvetica", base_size = 14) +
+  theme(legend.position = "none",
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(color = "black"),
+        axis.title.x = element_text(color = "black", size = 14),
+        plot.margin = margin(0, 0, 0, 0, "pt")) +
+  labs(x = "Intersection", y = NULL) + scale_y_discrete(labels = c("Downstream + SCP1",
+                                                                   "Upstream + SCP1",
+                                                                   "Downstream + INS",
+                                                                   "Upstream + INS"))
+
+
+design <- "
+11
+22
+"
+
+active_upset_plot <- free(intersect_bar, type = "space", side = "l") + sig_mat + plot_layout(design = design)
+ggsave(active_upset_plot, filename = paste0(fig_dir, "upset_plot.png", height = 5.5, width = 9, units = "in", dpi = 600)
 
 #####################
 ### Joint testing ###
