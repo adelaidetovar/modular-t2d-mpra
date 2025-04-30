@@ -604,6 +604,49 @@ design <- "
 active_upset_plot <- free(intersect_bar, type = "space", side = "l") + sig_mat + plot_layout(design = design)
 ggsave(active_upset_plot, filename = paste0(fig_dir, "upset_plot.png", height = 5.5, width = 9, units = "in", dpi = 600)
 
+sum(sig_df$A) #6337
+sum(sig_df$B) #4680
+sum(sig_df$C) #7724
+sum(sig_df$D) #5596
+
+bar_df <- data.frame("condition" = c("UpINS", "DownINS", "UpSCP1", "DownSCP1"),
+                     "active" = c(5596, 7724, 4680, 6337))
+bar_df$inactive <- 11656 - bar_df$active
+
+active_bar <- bar_df %>%
+  pivot_longer(cols = -condition,
+               names_to = "enhancer_type") %>%
+  mutate(condition = factor(condition, levels = c("UpINS", "DownINS", "UpSCP1", "DownSCP1")),
+         enhancer_type = factor(enhancer_type, levels = c("inactive", "active")),
+         label = case_when(enhancer_type == "active" & condition == "UpINS" ~ "5,596\n48.01%",
+                           enhancer_type == "active" & condition == "DownINS" ~ "7,724\n66.27%",
+                           enhancer_type == "active" & condition == "UpSCP1" ~ "4,680\n40.15%",
+                           enhancer_type == "active" & condition == "DownSCP1" ~ "6,337\n54.37%",
+                           TRUE ~ ""),
+         label_pos = 20,
+         value = (value/11656) * 100) %>%
+  ggplot(aes(x = condition, y = value, fill = interaction(condition, enhancer_type))) +
+  geom_bar(stat = "identity", color = "black", linewidth = 0.25) + theme_minimal(base_family = "Helvetica", base_size = 14) +
+  theme(legend.position = "none",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        axis.text.x = element_text(angle = 45,
+                                   hjust = 0.75, vjust = 1)) +
+  geom_text(aes(label = label, y = label_pos),
+            size = 3.75, family = "Helvetica",
+            lineheight = 0.75) +
+  scale_fill_manual(values = c(rep("#8E8E8E",4),
+                               "#56B4E9", "#0072B2",
+                               "#F0E442", "#E69F00")) +
+  scale_y_continuous(labels = c("0%", "25%", "50%", "75%", "100%")) +
+  scale_x_discrete(labels = c("Upstream +\nINS",
+                              "Downstream +\nINS",
+                              "Upstream +\nSCP1",
+                              "Downstream +\nSCP1")) +
+  labs(x = NULL, y = NULL)
+
+ggsave(active_bar, filename=paste0(fig_dir, "active_bar.png"), units = "in", height = 5, width = 5, dpi = 600)
+       
 #####################
 ### Joint testing ###
 #####################
