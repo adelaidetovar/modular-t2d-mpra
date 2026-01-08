@@ -59,14 +59,22 @@ summ_filt_cts = filtered_cts %>%
           across(dna:rep5, sum)) %>%
   distinct(refname, config, .keep_all = TRUE)
 
+nonzero_oligos <- summ_filt_cts %>%
+  filter(rowSums(across(rep1:rep5, ~ .x > 0)) >= 3) %>%
+  mutate(refname_full = paste(config, refname, sep = "_"))
+
 # format counts for MPRAnalyze
 reform_filt_cts = filtered_cts %>%
+  mutate(refname_full = paste(config, refname, sep = "_")) %>%
+  filter(refname_full %in% nonzero_oligos$refname_full) %>%
+  select(-c(refname_full)) %>%
   group_by(refname, config) %>%
   mutate(bcnum = 1:n()) %>%
   ungroup() %>%
   mutate(bcnum = paste0("bc",bcnum))
 
-gather_filt_cts = reform_filt_cts %>% gather(rep, value, -c(refname, bcnum, barcode, config)) %>%
+gather_filt_cts = reform_filt_cts %>%
+  gather(rep, value, -c(refname, bcnum, barcode, config)) %>%
   mutate(refname_full = paste(config, refname, sep = "_"),
          bcnum_rep = paste(bcnum, rep, sep = "_"))
 
@@ -181,8 +189,83 @@ tpm_filt_pairs <- tpm_filt_pairs %>%
          ratio4 = log2((rep4/dna)+1),
          ratio5 = log2((rep5/dna)+1))
 
+full_output <- left_join(output, tpm_filt_pairs %>% select(c(refname_full, ratio1:ratio5)), by = "refname_full")
+
+write.table(full_output, paste0(out_dir, "tovar_library.res_full.tsv"), sep='\t', row.names=FALSE)
+
 ins_filt_pairs <- tpm_filt_pairs %>%
   filter(config == "ins")
+
+ins_filt_long <- ins_filt_pairs %>%
+  filter(rsid != "NA") %>%
+  pivot_longer(cols = matches("ratio"),
+               names_to = "replicate",
+               values_to = "activity") %>%
+  mutate(allele_type = paste(allele, type, sep = "_"))
+
+test_contrasts <- function(data) {
+  contrasts <- list(
+    ref_vs_alt = list(ref = "R_orig", compare = "A_orig"),
+    ref_vs_ref_del = list(ref = "R_orig", compare = "R_del"),
+    ref_vs_ref_shf = list(ref = "R_orig", compare = "R_shf"),
+    ref_vs_alt_del = list(ref = "R_orig", compare = "A_del"),
+    ref_vs_alt_shf = list(ref = "R_orig", compare = "A_shf"),
+    alt_vs_alt_del = list(ref = "A_orig", compare = "A_del"),
+    alt_vs_alt_shf = list(ref = "A_orig", compare = "A_shf"),
+    alt_vs_ref_del = list(ref = "A_orig", compare = "R_del"),
+    alt_vs_ref_shf = list(ref = "A_orig", compare = "R_shf")
+  )
+
+  results <- map_dfr(names(contrasts), function(contrast_id) {
+    ref_group <- contrasts[[contrast_id]]$ref
+    compare_group <- contrasts[[contrast_id]]$compare
+
+    ref_df <- data %>%
+      filter(allele_type == ref_group) %>%
+      pull(activity)
+
+    compare_df <- data %>%
+      filter(allele_type == compare_group) %>%
+      pull(activity)
+
+    if(length(ref_df) == 0 | length(compare_df) == 0) {
+      return(tibble(contrast = contrast_id, p_value = NA,
+                    estimate = NA, mean_intact = NA, mean_perturbed = NA))
+    }
+
+    tryCatch({
+      test_res <- wilcox.test(comp_df, ref_df)
+
+      tibble(
+        contrast = contrast_id,
+        p_value = test_res$p.value,
+        mean_intact = mean(ref_df, na.rm = TRUE),
+        mean_perturbed = mean(comp_df, na.rm = TRUE),
+        estimate = mean_perturbed - mean_intact)
+      }, error = function(e) {
+        tibble(contrast = contrast_id, p_value = NA, estimate = NA, mean_intact = NA, mean_perturbed = NA)
+      })
+    })
+  return(results)
+}
+
+contrast_res <- ins_filt_long %>%
+  group_by(min_name) %>%
+  nest() %>%
+  mutate(tests = map(data, test_contrasts)) %>%
+  select(-data) %>%
+  unnest(tests)
+
+sig_sets <- contrast_res %>%
+  filter(!is.na(p_value)) %>%
+  group_by(min_name) %>%
+  reframe(
+    any_sig = any(p_value < 0.05, na.rm = TRUE),
+    n_sig = sum(p_value < 0.05, na.rm = TRUE),
+    min_p = min(p_value, na.rm = TRUE),
+    sig_contrast = paste(contrast[p_value < 0.05], collapse = ", "),
+    .groups = "drop") %>%
+  filter(any_sig)
 
 scp_filt_cts <- summ_filt_cts %>%
   filter(config == "scp")
