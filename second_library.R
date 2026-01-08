@@ -160,8 +160,7 @@ summ_filt_cts <- summ_filt_cts %>%
                           TRUE ~ site))
 
 summ_filt_pairs <- summ_filt_cts %>%
-  mutate(min_name = paste(rsid, site, config, sep = "_")) %>%
-  filter(min_name %in% unique(rsid_filt$min_name))
+  mutate(min_name = paste(rsid, site, config, sep = "_"))
 
 summ_filt_pairs$category <- "test_vars"
 neg_filt_pairs <- summ_filt_cts %>%
@@ -194,7 +193,8 @@ full_output <- left_join(output, tpm_filt_pairs %>% select(c(refname_full, ratio
 write.table(full_output, paste0(out_dir, "tovar_library.res_full.tsv"), sep='\t', row.names=FALSE)
 
 ins_filt_pairs <- tpm_filt_pairs %>%
-  filter(config == "ins")
+  filter(config == "ins") %>%
+  filter(min_name %in% unique(rsid_filt$min_name))
 
 ins_filt_long <- ins_filt_pairs %>%
   filter(rsid != "NA") %>%
