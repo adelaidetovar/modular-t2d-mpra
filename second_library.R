@@ -63,6 +63,16 @@ nonzero_oligos <- summ_filt_cts %>%
   filter(rowSums(across(rep1:rep5, ~ .x > 0)) >= 3) %>%
   mutate(refname_full = paste(config, refname, sep = "_"))
 
+neg_control_df <- nonzero_oligos %>%
+  filter(substr(refname_full, 5, 5) == "N") %>%
+  mutate(ratio1 = log2(rep1/dna),
+         ratio2 = log2(rep2/dna),
+         ratio3 = log2(rep3/dna),
+         ratio4 = log2(rep4/dna),
+         ratio5 = log2(rep5/dna),
+         avg_ratio = (ratio1 + ratio2 + ratio3 + ratio4 + ratio5)/5) %>%
+  filter(avg_ratio >= -1 & avg_ratio <= 0.5)
+
 # format counts for MPRAnalyze
 reform_filt_cts = filtered_cts %>%
   mutate(refname_full = paste(config, refname, sep = "_")) %>%
@@ -108,7 +118,7 @@ rna = as.matrix(rna[,-1])
 dna_annot = dna_filt_annot
 rna_annot = rna_filt_annot
 
-obj_test = MpraObject(dnaCounts = dna, rnaCounts = rna, dnaAnnot = dna_annot, rnaAnnot = rna_annot)
+obj_test = MpraObject(dnaCounts = dna, rnaCounts = rna, dnaAnnot = dna_annot, rnaAnnot = rna_annot, controls = neg_control_df$refname_full)
 
 obj_test <- estimateDepthFactors(obj_test, which.lib = "dna",
                                  depth.estimator = "uq")
@@ -182,11 +192,11 @@ tpm_filt_pairs <- summ_filt_pairs %>%
   pivot_wider(names_from = sample, values_from = tpm)
 
 tpm_filt_pairs <- tpm_filt_pairs %>%
-  mutate(ratio1 = log2((rep1/dna)+1),
-         ratio2 = log2((rep2/dna)+1),
-         ratio3 = log2((rep3/dna)+1),
-         ratio4 = log2((rep4/dna)+1),
-         ratio5 = log2((rep5/dna)+1))
+  mutate(ratio1 = log2((rep1/dna),
+         ratio2 = log2(rep2/dna),
+         ratio3 = log2(rep3/dna),
+         ratio4 = log2(rep4/dna),
+         ratio5 = log2(rep5/dna))
 
 full_output <- left_join(output, tpm_filt_pairs %>% select(c(refname_full, ratio1:ratio5)), by = "refname_full")
 
