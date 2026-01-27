@@ -30,21 +30,53 @@ out_dir <- paste0(work_dir, "output/")
 
 # read in dictionaries
 dict_path = file.path('/path/to/tovar_library_barcode_pairing.txt')
-
 dict = fread(dict_path)
-# fix neg control barcodes b/c they're reverse complements
-neg_oligos <- dict %>%
-  filter(str_detect(refname, "^NA"))
-barcodes <- Biostrings::DNAStringSet(neg_oligos$barcode)
-barcodes <- Biostrings::reverseComplement(barcodes)
-barcodes <- as.character(barcodes)
-neg_oligos$barcode <- barcodes
-dict <- dict %>%
-  filter(!str_detect(refname, "^NA"))
-dict <- bind_rows(dict, neg_oligos)
 
 cts_path = file.path('/path/to/tovar_library_counts.txt')
 raw_cts = fread(cts_path)
+
+raw_tpm = raw_cts %>%
+  pivot_longer(starts_with(c("rep","dna")),
+               names_to = "sample",
+               values_to = "counts") %>%
+  group_by(sample) %>%
+  mutate(tpm = (counts / (sum(counts)) * 1e6)) %>%
+  ungroup() %>%
+  select(-counts) %>%
+  pivot_wider(names_from = sample, values_from = tpm)
+
+merged_tpm = merge(raw_tpm, dict, by = "barcode") %>%
+  group_by(refname, config) %>%
+  reframe(refname = refname,
+          config = config,
+          across(c(rep1:dna), sum)) %>%
+  distinct(refname, config, .keep_all = TRUE)
+
+merged_ratio = merged_tpm %>%
+  separate(refname, into = c("rsid", "chr", "pos_hg38", "ref", "alt", "allele", "type", "site"),
+           sep = "_", remove = FALSE) %>%
+  mutate(site = case_when(type == "left" ~ "left",
+                          type == "right" ~ "right",
+                          TRUE ~ site),
+         type = case_when(is.na(type) | type == "left" | type == "right" ~ "orig",
+                          TRUE ~ type),
+         site = case_when(is.na(site) ~ "ctr",
+                          TRUE ~ site)) %>%
+  mutate(ratio1 = log2((rep1/dna)),
+         ratio2 = log2((rep2/dna)),
+         ratio3 = log2((rep3/dna)),
+         ratio4 = log2((rep4/dna)),
+         ratio5 = log2((rep5/dna)),
+         ratio1 = case_when(is.infinite(ratio1) ~ 0,
+                            TRUE ~ ratio1),
+         ratio2 = case_when(is.infinite(ratio2) ~ 0,
+                            TRUE ~ ratio2),
+         ratio3 = case_when(is.infinite(ratio3) ~ 0,
+                            TRUE ~ ratio3),
+         ratio4 = case_when(is.infinite(ratio4) ~ 0,
+                            TRUE ~ ratio4),
+         ratio5 = case_when(is.infinite(ratio5) ~ 0,
+                            TRUE ~ ratio5))
 
 merged_raw_cts = merge(dict, raw_cts, by = "barcode")
 
@@ -59,11 +91,31 @@ summ_filt_cts = filtered_cts %>%
           across(dna:rep5, sum)) %>%
   distinct(refname, config, .keep_all = TRUE)
 
+summ_filt_tpm = summ_filt_cts %>%
+  separate(refname, into = c("rsid", "chr", "pos_hg38", "ref", "alt", "allele", "type", "site"),
+           sep = "_", remove = FALSE) %>%
+  mutate(site = case_when(type == "left" ~ "left",
+                          type == "right" ~ "right",
+                          TRUE ~ site),
+         type = case_when(is.na(type) | type == "left" | type == "right" ~ "orig",
+                          TRUE ~ type),
+         site = case_when(is.na(site) ~ "ctr",
+                          TRUE ~ site)) %>%
+  pivot_longer(starts_with(c("rep","dna")), 
+               names_to = "sample", 
+               values_to = "counts") %>%
+  ungroup() %>%
+  select(refname, rsid, chr, pos_hg38, ref, alt, allele, type, site, config, sample, counts) %>%
+  group_by(sample) %>%
+  mutate(tpm = (counts / (sum(counts)) * 1e6)) %>%
+  select(refname, rsid, chr, pos_hg38, ref, alt, allele, type, site, config, sample, tpm) %>%
+  pivot_wider(names_from = sample, values_from = tpm)
+
 nonzero_oligos <- summ_filt_cts %>%
   filter(rowSums(across(rep1:rep5, ~ .x > 0)) >= 3) %>%
   mutate(refname_full = paste(config, refname, sep = "_"))
 
-neg_control_df <- nonzero_oligos %>%
+neg_control_oligos <- nonzero_oligos %>%
   filter(substr(refname_full, 5, 5) == "N") %>%
   mutate(ratio1 = log2(rep1/dna),
          ratio2 = log2(rep2/dna),
@@ -148,63 +200,22 @@ output <- output %>%
 write.table(output, paste0(out_dir, "tovar_library.res.tsv"), sep='\t', row.names=FALSE)
 
 out_filt <- output %>%
-  dplyr::filter(pval.zscore < 0.05)
-
-neg_filt <- output %>%
-  dplyr::filter(pval.zscore > 0.2 & rsid == "NA")
+  dplyr::filter(pval.mad < 0.05) %>%
+  mutate(min_name = paste(rsid, site, prom, sep = "_"))
 
 rsid_filt <- out_filt %>%
   dplyr::filter(rsid != "NA") %>%
   distinct(rsid, site, prom, .keep_all = TRUE) %>%
   mutate(min_name = paste(rsid, site, prom, sep = "_"))
-  
-summ_filt_cts <- summ_filt_cts %>%
-  separate(refname, into = c("rsid", "chr", "pos_hg38", "ref", "alt", "allele", "type", "site"),
-           sep = "_", remove = FALSE) %>%
-  mutate(site = case_when(type == "left" ~ "left",
-                          type == "right" ~ "right",
-                          TRUE ~ site),
-         type = case_when(is.na(type) | type == "left" | type == "right" ~ "orig",
-                          TRUE ~ type),
-         site = case_when(is.na(site) ~ "ctr",
-                          TRUE ~ site))
 
-summ_filt_pairs <- summ_filt_cts %>%
-  mutate(min_name = paste(rsid, site, config, sep = "_"))
-
-summ_filt_pairs$category <- "test_vars"
-neg_filt_pairs <- summ_filt_cts %>%
+tpm_filt_pairs <- ratio_merge %>%
+  mutate(refname_full = paste(config, refname, sep = "_")) %>%
+  filter(refname_full %in% output$refname_full) %>%
   mutate(min_name = paste(rsid, site, config, sep = "_")) %>%
-  filter(paste(config, refname, sep = "_") %in% neg_filt$refname_full) %>%
-  mutate(category = "neg_ctrls")
-
-summ_filt_pairs <- bind_rows(summ_filt_pairs, neg_filt_pairs)
-
-tpm_filt_pairs <- summ_filt_pairs %>%
-  pivot_longer(starts_with(c("rep","dna")), 
-               names_to = "sample", 
-               values_to = "counts") %>%
-  ungroup() %>%
-  select(refname, rsid, chr, pos_hg38, ref, alt, allele, type, site, config, min_name, sample, counts) %>%
-  group_by(sample) %>%
-  mutate(tpm = (counts / (sum(counts)) * 1e6)) %>%
-  select(refname, rsid, chr, pos_hg38, ref, alt, allele, type, site, config, min_name, sample, tpm) %>%
-  pivot_wider(names_from = sample, values_from = tpm)
-
-tpm_filt_pairs <- tpm_filt_pairs %>%
-  mutate(ratio1 = log2((rep1/dna),
-         ratio2 = log2(rep2/dna),
-         ratio3 = log2(rep3/dna),
-         ratio4 = log2(rep4/dna),
-         ratio5 = log2(rep5/dna))
-
-full_output <- left_join(output, tpm_filt_pairs %>% select(c(refname_full, ratio1:ratio5)), by = "refname_full")
-
-write.table(full_output, paste0(out_dir, "tovar_library.res_full.tsv"), sep='\t', row.names=FALSE)
+  filter(min_name %in% out_filt$min_name)
 
 ins_filt_pairs <- tpm_filt_pairs %>%
-  filter(config == "ins") %>%
-  filter(min_name %in% unique(rsid_filt$min_name))
+  filter(config == "ins")
 
 ins_filt_long <- ins_filt_pairs %>%
   filter(rsid != "NA") %>%
@@ -213,169 +224,137 @@ ins_filt_long <- ins_filt_pairs %>%
                values_to = "activity") %>%
   mutate(allele_type = paste(allele, type, sep = "_"))
 
+## test contrasts for active oligo sets
+
 test_contrasts <- function(data) {
   contrasts <- list(
-    ref_vs_alt = list(ref = "R_orig", compare = "A_orig"),
-    ref_vs_ref_del = list(ref = "R_orig", compare = "R_del"),
-    ref_vs_ref_shf = list(ref = "R_orig", compare = "R_shf"),
-    ref_vs_alt_del = list(ref = "R_orig", compare = "A_del"),
-    ref_vs_alt_shf = list(ref = "R_orig", compare = "A_shf"),
-    alt_vs_alt_del = list(ref = "A_orig", compare = "A_del"),
-    alt_vs_alt_shf = list(ref = "A_orig", compare = "A_shf"),
-    alt_vs_ref_del = list(ref = "A_orig", compare = "R_del"),
-    alt_vs_ref_shf = list(ref = "A_orig", compare = "R_shf")
+    ref_vs_alt = list(ref = "R_orig", comparison = "A_orig"),
+    ref_vs_ref_del = list(ref = "R_orig", comparison = "R_del"),
+    ref_vs_ref_shf = list(ref = "R_orig", comparison = "R_shf"),
+    ref_vs_alt_del = list(ref = "R_orig", comparison = "A_del"),
+    ref_vs_alt_shf = list(ref = "R_orig", comparison = "A_shf"),
+    alt_vs_alt_del = list(ref = "A_orig", comparison = "A_del"),
+    alt_vs_alt_shf = list(ref = "A_orig", comparison = "A_shf"),
+    alt_vs_ref_del = list(ref = "A_orig", comparison = "R_del"),
+    alt_vs_ref_shf = list(ref = "A_orig", comparison = "R_shf")
   )
-
-  results <- map_dfr(names(contrasts), function(contrast_id) {
-    ref_group <- contrasts[[contrast_id]]$ref
-    compare_group <- contrasts[[contrast_id]]$compare
-
-    ref_df <- data %>%
+  
+  results <- map_dfr(names(contrasts), function(contrast_name) {
+    ref_group <- contrasts[[contrast_name]]$ref
+    comp_group <- contrasts[[contrast_name]]$comparison
+    
+    ref_data <- data %>%
       filter(allele_type == ref_group) %>%
       pull(activity)
-
-    compare_df <- data %>%
-      filter(allele_type == compare_group) %>%
+    
+    comp_data <- data %>%
+      filter(allele_type == comp_group) %>%
       pull(activity)
-
-    if(length(ref_df) == 0 | length(compare_df) == 0) {
-      return(tibble(contrast = contrast_id, p_value = NA,
+    
+    if(length(ref_data) == 0 | length(comp_data) == 0){
+      return(tibble(contrast = contrast_name, p_value = NA,
                     estimate = NA, mean_intact = NA, mean_perturbed = NA))
     }
-
+    
     tryCatch({
-      test_res <- wilcox.test(comp_df, ref_df)
-
+      test_result <- wilcox.test(comp_data, ref_data, exact = FALSE)
+      
       tibble(
-        contrast = contrast_id,
-        p_value = test_res$p.value,
-        mean_intact = mean(ref_df, na.rm = TRUE),
-        mean_perturbed = mean(comp_df, na.rm = TRUE),
-        estimate = mean_perturbed - mean_intact)
-      }, error = function(e) {
-        tibble(contrast = contrast_id, p_value = NA, estimate = NA, mean_intact = NA, mean_perturbed = NA)
-      })
+        contrast = contrast_name,
+        p_value = test_result$p.value,
+        estimate = mean(comp_data, na.rm = TRUE) - mean(ref_data, na.rm = TRUE),
+        mean_intact = mean(ref_data, na.rm = TRUE),
+        mean_perturbed = mean(comp_data, na.rm = TRUE)
+      )
+    }, error = function(e) {
+      tibble(contrast = contrast_name, p_value = NA, estimate = NA,
+             mean_intact = NA, mean_perturbed = NA)
     })
+  })
+  
   return(results)
 }
 
-contrast_res <- ins_filt_long %>%
+contrast_results <- ins_filt_long %>%
   group_by(min_name) %>%
   nest() %>%
   mutate(tests = map(data, test_contrasts)) %>%
   select(-data) %>%
   unnest(tests)
 
-sig_sets <- contrast_res %>%
+significant_sets <- contrast_results %>%
   filter(!is.na(p_value)) %>%
   group_by(min_name) %>%
-  reframe(
+  summarize(
     any_sig = any(p_value < 0.05, na.rm = TRUE),
     n_sig = sum(p_value < 0.05, na.rm = TRUE),
     min_p = min(p_value, na.rm = TRUE),
     sig_contrast = paste(contrast[p_value < 0.05], collapse = ", "),
-    .groups = "drop") %>%
+    .groups = "drop"
+  ) %>%
   filter(any_sig)
 
-scp_filt_cts <- summ_filt_cts %>%
-  filter(config == "scp")
+## plotting
 
-scp_filt_tpm <- scp_filt_cts %>%
-  pivot_longer(starts_with(c("rep","dna")), 
-               names_to = "sample", 
-               values_to = "counts") %>%
-  ungroup() %>%
-  select(refname, rsid, chr, pos_hg38, ref, alt, allele, type, site, config, sample, counts) %>%
-  group_by(sample) %>%
-  mutate(tpm = (counts / (sum(counts)) * 1e6)) %>%
-  select(refname, rsid, chr, pos_hg38, ref, alt, allele, type, site, config, sample, tpm) %>%
-  pivot_wider(names_from = sample, values_from = tpm)
+neg_control_df <- summ_filt_tpm %>%
+  filter(rowSums(across(rep1:rep5, ~ .x > 0)) >= 5) %>%
+  mutate(refname_full = paste(config, refname, sep = "_")) %>%
+  filter(substr(refname_full, 5, 5) == "N") %>%
+  mutate(ratio1 = log2((rep1/dna)),
+         ratio2 = log2((rep2/dna)),
+         ratio3 = log2((rep3/dna)),
+         ratio4 = log2((rep4/dna)),
+         ratio5 = log2((rep5/dna)),
+         ratio1 = case_when(is.infinite(ratio1) ~ 0,
+                            TRUE ~ ratio1),
+         ratio2 = case_when(is.infinite(ratio2) ~ 0,
+                            TRUE ~ ratio2),
+         ratio3 = case_when(is.infinite(ratio3) ~ 0,
+                            TRUE ~ ratio3),
+         ratio4 = case_when(is.infinite(ratio4) ~ 0,
+                            TRUE ~ ratio4),
+         ratio5 = case_when(is.infinite(ratio5) ~ 0,
+                            TRUE ~ ratio5),
+         avg_ratio = (ratio1+ ratio2 + ratio3 + ratio4 + ratio5)/5) %>%
+  filter(avg_ratio >= 0 & avg_ratio <= 1) %>%
+  group_by(config) %>%
+  reframe(ratio1 = median(ratio1),
+          ratio2 = median(ratio2),
+          ratio3 = median(ratio3),
+          ratio4 = median(ratio4),
+          ratio5 = median(ratio5)) %>%
+  mutate(refname = "neg_ctrl") %>%
+  pivot_longer(!c(config,refname))
 
-scp_filt_tpm <- scp_filt_tpm %>%
-  mutate(ratio1 = log2((rep1/dna)+1),
-         ratio2 = log2((rep2/dna)+1),
-         ratio3 = log2((rep3/dna)+1),
-         ratio4 = log2((rep4/dna)+1),
-         ratio5 = log2((rep5/dna)+1))
+ratio_plots <- ratio_merge %>%
+  select(c(refname:config, ratio1:ratio5)) %>%
+  pivot_longer(!c(refname:config)) %>%
+  left_join(., neg_control_df[,c(1,3,4)], by = c("name", "config")) %>%
+  mutate(norm_value = value.x - value.y) %>%
+  select(c(refname:config, name, norm_value)) %>%
+  pivot_wider(values_from = norm_value) %>%
+  mutate(refname_full = paste(config, refname, sep = "_"))
 
-ins_filt_melt <- melt(ins_filt_pairs,
-                      id.vars = c("refname", "config", "allele", "type",
-                                  "site"),
-                      measure.vars = c("ratio1", "ratio2", "ratio3",
-                                       "ratio4", "ratio5"))
+rs163_ins_df <- ratio_plots %>%
+  select(c(refname:config, ratio1:ratio5)) %>%
+  filter(rsid == "rs1635852" & site == "left" & config == "ins") %>%
+  pivot_longer(!c(refname:config)) %>%
+  mutate(allele = case_when(type %in% c("del", "shf") ~ "",
+                            TRUE ~ allele),
+         allele = factor(allele, levels = c("R", "", "A")),
+         type = factor(type, levels = c("orig", "del", "shf")))
 
-scp_filt_melt <- melt(scp_filt_tpm,
-                      id.vars = c("refname", "config", "allele", "type",
-                                  "site"),
-                      measure.vars = c("ratio1", "ratio2", "ratio3",
-                                       "ratio4", "ratio5"))
-
-
-neg_controls <- c("NA_chr19_3586640_NA_NA_NA",
-                  "NA_chr5_117093713_NA_NA_NA",
-                  "NA_chr11_116285064_NA_NA_NA")
-
-neg_filt_melt <- ins_filt_melt %>%
-  filter(refname %in% neg_controls) %>%
-  group_by(variable) %>%
-  reframe(refname = refname,
-          config = config,
-          allele = allele,
-          type = type,
-          site = site,
-          variable = variable,
-          value = mean(value)) %>%
-  distinct(variable, .keep_all = TRUE)
-
-neg_scp_filt_melt <- scp_filt_melt %>%
-  filter(refname %in% neg_controls) %>%
-  group_by(variable) %>%
-  reframe(refname = refname,
-          config = config,
-          allele = allele,
-          type = type,
-          site = site,
-          variable = variable,
-          value = mean(value)) %>%
-  distinct(variable, .keep_all = TRUE)
+rs163_ins_res <- rs163_ins_df %>%
+  rstatix::wilcox_test(value ~ refname)
   
-
-rs163_scp_melt <- scp_filt_melt %>%
-  filter(refname %in% c("rs1635852_chr7_28149792_T_C_R_del_left", "rs1635852_chr7_28149792_T_C_R_left",
-                        "rs1635852_chr7_28149792_T_C_R_shf_left","rs1635852_chr7_28149792_T_C_A_left"))
-
-rs163_scp_melt <- left_join(rs163_scp_melt, neg_scp_filt_melt[,c(1,7)], by = "variable") %>%
-  mutate(plot_value = value.x - value.y)
-
-rs163_scp_melt <- rs163_scp_melt %>%
-  mutate(allele = case_when(type %in% c("del","shf") ~ "",
-                            TRUE ~ allele),
-         allele = factor(allele, levels = c("R","","A")),
-         type = factor(type, levels = c("orig","del","shf")))
-
-# rs1635852
-rs163_melt <- ins_filt_melt %>%
-  filter(refname %in% c("rs1635852_chr7_28149792_T_C_R_del_left", "rs1635852_chr7_28149792_T_C_R_left",
-                        "rs1635852_chr7_28149792_T_C_R_shf_left","rs1635852_chr7_28149792_T_C_A_left"))
-
-rs163_melt <- left_join(rs163_melt, neg_filt_melt[,c(1,7)], by = "variable") %>%
-  mutate(plot_value = value.x - value.y)
-rs163_melt <- rs163_melt %>%
-  mutate(allele = case_when(type %in% c("del","shf") ~ "",
-                            TRUE ~ allele),
-         allele = factor(allele, levels = c("R","","A")),
-         type = factor(type, levels = c("orig","del","shf")))
-
-rs163_melt %>% rstatix::wilcox_test(value.x ~ refname, exact = TRUE)
-
-rs163_scp_melt %>%
-  ggplot(aes(x = allele, y = plot_value, color = interaction(type,allele))) +
+rs163_ins_plot <- rs163_ins_df %>%
+  ggplot(aes(x = allele, y = value, color = interaction(type,allele))) +
   geom_boxplot(aes(linetype = type, fill = interaction(type,allele)),
                outlier.shape = NA, position = position_dodge2(preserve = "single")) + 
   geom_point(aes(group = interaction(allele,type)),
-             pch = 21, size = 2.5, color = "black",
+             pch = 21, size = 3, color = "black",
              fill = "white", position = position_dodge(width = 0.75),
-             stroke = 0.75) +
+             stroke = 1) +
   theme_bw(base_size = 15) + labs(x = "Allele", y = expression(paste("log"[2], "(RNA/DNA), rs1635852"))) +
   scale_color_manual(values = c("#ffffff","#000000","#000000",
                                 "#ffffff","#0000ff", "#0000ff")) +
@@ -383,7 +362,7 @@ rs163_scp_melt %>%
                                "#0000ff", "#ffffff", "#ffffff")) +
   scale_linetype_manual(values = c("solid", "solid", "dashed"),
                         labels = c("Original", "Deleted", "Shuffled")) +
-  scale_x_discrete(labels = c("ref" = "Ref\n(Risk, T)", "none" = "", "alt" = "Alt\n(Non-risk, C)")) +
+  scale_x_discrete(labels = c("R" = "Ref\n(Risk, T)", "none" = "", "A" = "Alt\n(Non-risk, C)")) +
   guides(linetype = guide_legend(
     override.aes = (list(shape = 21, fill = c("black", "white", "white"),
                          linetype = c("solid", "solid", "dashed"),
@@ -392,7 +371,7 @@ rs163_scp_melt %>%
   ),
   color = "none",
   fill = "none") +
-  theme(legend.position = c(0.8, 0.15),
+  theme(legend.position = c(0.875, 0.175),
         legend.background = element_rect(fill="white",
                                          size=0.5, linetype="solid",
                                          colour ="black"),
@@ -400,46 +379,28 @@ rs163_scp_melt %>%
         axis.text.x = element_text(size = 16),
         axis.text.y = element_text(size = 16),
         axis.title.y = element_text(size = 16)) +
-  geom_hline(yintercept = 0, color = "#818181")
+  geom_hline(yintercept = 0, color = "#818181") +
+  scale_y_continuous(limits = c(-1, 1.75))
 
-ggsave(filename = paste0(fig_dir, "rs1635852_plot.png"), plot = rs118_plot,
-       dpi = 600, device = ragg::agg_png(), units = "in", width = 5, height = 5)
+ggsave(plot = rs163_ins_plot, filename = paste0(fig_dir, "rs1635852-ins.png"),
+       dpi = 600, units = "in", width = 6.25, height = 5, device = ragg::agg_png())
 
-# rs11819995
-rs118_scp_melt <- scp_filt_melt %>%
-  filter(refname %in% c("rs11819995_chr11_128519496_C_T_A_right", "rs11819995_chr11_128519496_C_T_A_shf_right",
-                        "rs11819995_chr11_128519496_C_T_A_del_right","rs11819995_chr11_128519496_C_T_R_right",
-                        "rs11819995_chr11_128519496_C_T_R_shf_right","rs11819995_chr11_128519496_C_T_R_del_right"))
-  
+rs118_ins_df <- ratio_plots %>%
+  select(c(refname:config, ratio1:ratio5)) %>%
+  filter(rsid == "rs11819995" & site == "right" & config == "ins") %>%
+  pivot_longer(!c(refname:config)) %>%
+  mutate(allele = factor(allele, levels = c("R", "", "A")),
+         type = factor(type, levels = c("orig", "del", "shf")))
 
-rs118_melt <- ins_filt_melt %>%
-  filter(refname %in% c("rs11819995_chr11_128519496_C_T_A_right", "rs11819995_chr11_128519496_C_T_A_shf_right",
-                        "rs11819995_chr11_128519496_C_T_A_del_right","rs11819995_chr11_128519496_C_T_R_right",
-                        "rs11819995_chr11_128519496_C_T_R_shf_right","rs11819995_chr11_128519496_C_T_R_del_right"))
+rs118_ins_res <- rs118_ins_df %>%
+  rstatix::wilcox_test(value ~ refname)
 
-rs118_scp_melt <- left_join(rs118_scp_melt, neg_scp_filt_melt[,c(1,7)], by = "variable") %>%
-  mutate(plot_value = value.x - value.y)
-rs118_scp_melt <- rs118_scp_melt %>%
-  mutate(allele = factor(allele, levels = c("R","A")),
-         type = factor(type, levels = c("orig","del","shf")))
-
-rs118_scp_melt %>% rstatix::wilcox_test(value.x ~ refname, exact = TRUE)
-
-
-rs118_melt <- left_join(rs118_melt, neg_filt_melt[,c(1,7)], by = "variable") %>%
-  mutate(plot_value = value.x - value.y)
-rs118_melt <- rs118_melt %>%
-  mutate(allele = factor(allele, levels = c("R","A")),
-         type = factor(type, levels = c("orig","del","shf")))
-
-rs118_melt %>% rstatix::wilcox_test(value.x ~ refname, exact = TRUE)
-
-rs118_scp_melt %>%
-  ggplot(aes(x = allele, y = plot_value, color = interaction(type,allele))) +
+rs118_ins_plot <- rs118_ins_df %>%
+  ggplot(aes(x = allele, y = value, color = interaction(type,allele))) +
   geom_boxplot(aes(linetype = type, fill = interaction(type,allele)),
                outlier.shape = NA, position = position_dodge2(preserve = "single")) + 
   geom_point(aes(group = interaction(allele,type)),
-             pch = 21, size = 2.5, color = "black",
+             pch = 21, size = 3, color = "black",
              fill = "white", position = position_dodge(width = 0.75),
              stroke = 0.75) +
   theme_bw(base_size = 15) + labs(x = "Allele", y = expression(paste("log"[2],"(RNA/DNA), rs11819995"))) +
@@ -449,7 +410,7 @@ rs118_scp_melt %>%
                                "#0000ff", "#ffffff", "#ffffff")) +
   scale_linetype_manual(values = c("solid", "solid", "dashed"),
                         labels = c("Original", "Deleted", "Shuffled")) +
-  scale_x_discrete(labels = c("ref" = "Ref\n(Risk, T)", "none" = "", "alt" = "Alt\n(Non-risk, C)")) +
+  scale_x_discrete(labels = c("R" = "Ref\n(Non-risk, C)", "none" = "", "A" = "Alt\n(Risk, T)")) +
   guides(linetype = guide_legend(
     override.aes = (list(shape = 21, fill = c("black", "white", "white"),
                          linetype = c("solid", "solid", "dashed"),
@@ -458,7 +419,7 @@ rs118_scp_melt %>%
   ),
   color = "none",
   fill = "none") +
-  theme(legend.position = c(0.825, 0.17),
+  theme(legend.position = c(0.875, 0.175),
         legend.background = element_rect(fill="white",
                                          size=0.5, linetype="solid",
                                          colour ="black"),
@@ -467,7 +428,112 @@ rs118_scp_melt %>%
         axis.text.y = element_text(size = 16),
         axis.title.y = element_text(size = 16)) +
   geom_hline(yintercept = 0, color = "#818181") +
-  scale_y_continuous(limits = c(-2.15,3.1))
+  scale_y_continuous(limits = c(-1.25, 3))
 
-ggsave(filename = paste0(fig_dir, "rs11819995_plot.png"), plot = rs118_plot,
-       dpi = 600, device = ragg::agg_png(), units = "in", width = 5, height = 5)
+ggsave(plot = rs118_ins_plot, filename = paste0(fig_dir, "rs11819995-ins_plot.png"),
+       dpi = 600, units = "in", width = 6.25, height = 5, device = ragg::agg_png())
+
+rs163_df <- ratio_plots %>%
+  select(c(refname:config, ratio1:ratio5)) %>%
+  filter(rsid == "rs1635852" & site == "left") %>%
+  pivot_longer(!c(refname:config)) %>%
+  mutate(allele = case_when(type %in% c("del", "shf") ~ "",
+                            TRUE ~ allele),
+         allele = factor(allele, levels = c("R", "", "A")),
+         type = factor(type, levels = c("orig", "del", "shf")))
+
+rs163_scp_res <- rs163_df %>%
+  filter(config == "scp") %>%
+  rstatix::wilcox_test(value ~ refname)
+
+prom_label <- c("ins" = "INS", "scp" = "SCP1")
+
+rs163_joint_plot <- rs163_df %>%
+  ggplot(aes(x = allele, y = value, color = interaction(type,allele))) +
+  facet_wrap(. ~ config, labeller = labeller(config = prom_label)) +
+  geom_boxplot(aes(linetype = type, fill = interaction(type,allele)),
+               outlier.shape = NA, position = position_dodge2(preserve = "single")) + 
+  geom_point(aes(group = interaction(allele,type)),
+             pch = 21, size = 2.5, color = "black",
+             fill = "white", position = position_jitterdodge(dodge.width = 0.75, jitter.width = 0.35),
+             stroke = 0.75) +
+  theme_bw(base_size = 15) + labs(x = "Allele", y = expression(paste("log"[2], "(RNA/DNA), rs1635852"))) +
+  scale_color_manual(values = c("#ffffff","#000000","#000000",
+                                "#ffffff","#0000ff", "#0000ff")) +
+  scale_fill_manual(values = c("#ff0000", "#ffffff", "#ffffff",
+                               "#0000ff", "#ffffff", "#ffffff")) +
+  scale_linetype_manual(values = c("solid", "solid", "dashed"),
+                        labels = c("Original", "Deleted", "Shuffled")) +
+  scale_x_discrete(labels = c("R" = "Ref\n(Risk, T)", "none" = "", "A" = "Alt\n(Non-risk, C)")) +
+  guides(linetype = guide_legend(
+    override.aes = (list(shape = 21, fill = c("black", "white", "white"),
+                         linetype = c("solid", "solid", "dashed"),
+                         color = c("white", "black", "black"))),
+    title = "Oligo Type"
+  ),
+  color = "none",
+  fill = "none") +
+  theme(legend.position = c(0.1, 0.22),
+        legend.background = element_rect(fill="white",
+                                         size=0.5, linetype="solid",
+                                         colour ="black"),
+        text=element_text(family = "Helvetica"),
+        axis.text.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16)) +
+  geom_hline(yintercept = 0, color = "#818181") +
+  scale_y_continuous(breaks = seq(-5, 1, by = 1), labels = seq(-5, 1, by = 1),
+                     limits = c(-5.6, 1.75))
+
+ggsave(plot = rs163_joint_plot, filename = paste0(fig_dir, "rs1635852-joint_plot.png"),
+       dpi = 600, units = "in", width = 8, height = 5, device = ragg::agg_png())
+
+rs118_df <- ratio_merge %>%
+  select(c(refname:config, ratio1:ratio5)) %>%
+  filter(rsid == "rs11819995" & site == "right") %>%
+  pivot_longer(!c(refname:config)) %>%
+  mutate(allele = factor(allele, levels = c("R", "", "A")),
+         type = factor(type, levels = c("orig", "del", "shf")))
+
+rs118_scp_res <- rs118_df %>%
+  filter(config == "scp") %>%
+  rstatix::wilcox_test(value ~ refname)
+
+rs118_joint_plot <- rs118_df %>%
+  ggplot(aes(x = allele, y = value, color = interaction(type,allele))) +
+  facet_wrap(. ~ config, labeller = labeller(config = prom_label)) +
+  geom_boxplot(aes(linetype = type, fill = interaction(type,allele)),
+               outlier.shape = NA, position = position_dodge2(preserve = "single")) + 
+  geom_point(aes(group = interaction(allele,type)),
+             pch = 21, size = 2.5, color = "black",
+             fill = "white", position = position_jitterdodge(dodge.width = 0.75, jitter.width = 0.35),
+             stroke = 0.75) +
+  theme_bw(base_size = 15) + labs(x = "Allele", y = expression(paste("log"[2],"(RNA/DNA), rs11819995"))) +
+  scale_color_manual(values = c("#ffffff","#ff0000","#ff0000",
+                                "#ffffff","#0000ff", "#0000ff")) +
+  scale_fill_manual(values = c("#ff0000", "#ffffff", "#ffffff",
+                               "#0000ff", "#ffffff", "#ffffff")) +
+  scale_linetype_manual(values = c("solid", "solid", "dashed"),
+                        labels = c("Original", "Deleted", "Shuffled")) +
+  scale_x_discrete(labels = c("R" = "Ref\n(Non-risk, C)", "none" = "", "A" = "Alt\n(Risk, T)")) +
+  guides(linetype = guide_legend(
+    override.aes = (list(shape = 21, fill = c("black", "white", "white"),
+                         linetype = c("solid", "solid", "dashed"),
+                         color = c("white", "black", "black"))),
+    title = "Oligo Type"
+  ),
+  color = "none",
+  fill = "none") +
+  theme(legend.position = c(0.1, 0.22),
+        legend.background = element_rect(fill="white",
+                                         size=0.5, linetype="solid",
+                                         colour ="black"),
+        text=element_text(family = "Helvetica"),
+        axis.text.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16)) +
+  geom_hline(yintercept = 0, color = "#818181") +
+  scale_y_continuous(limits = c(-6.5, 3))
+
+ggsave(plot = rs118_joint_plot, filename = paste0(fig_dir, "rs11819995-joint_plot.png"),
+       dpi = 600, units = "in", width = 10, height = 5, device = ragg::agg_png())
