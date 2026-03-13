@@ -88,7 +88,7 @@ summ_filt_cts = filtered_cts %>%
   group_by(refname, config) %>%
   reframe(refname = refname,
           config = config,
-          across(dna:rep5, sum)) %>%
+          across(rep1:dna, sum)) %>%
   distinct(refname, config, .keep_all = TRUE)
 
 summ_filt_tpm = summ_filt_cts %>%
@@ -208,7 +208,7 @@ rsid_filt <- out_filt %>%
   distinct(rsid, site, prom, .keep_all = TRUE) %>%
   mutate(min_name = paste(rsid, site, prom, sep = "_"))
 
-tpm_filt_pairs <- ratio_merge %>%
+tpm_filt_pairs <- merged_ratio %>%
   mutate(refname_full = paste(config, refname, sep = "_")) %>%
   filter(refname_full %in% output$refname_full) %>%
   mutate(min_name = paste(rsid, site, config, sep = "_")) %>%
@@ -326,7 +326,7 @@ neg_control_df <- summ_filt_tpm %>%
   mutate(refname = "neg_ctrl") %>%
   pivot_longer(!c(config,refname))
 
-ratio_plots <- ratio_merge %>%
+ratio_plots <- merged_ratio %>%
   select(c(refname:config, ratio1:ratio5)) %>%
   pivot_longer(!c(refname:config)) %>%
   left_join(., neg_control_df[,c(1,3,4)], by = c("name", "config")) %>%
@@ -488,7 +488,7 @@ rs163_joint_plot <- rs163_df %>%
 ggsave(plot = rs163_joint_plot, filename = paste0(fig_dir, "rs1635852-joint_plot.png"),
        dpi = 600, units = "in", width = 8, height = 5, device = ragg::agg_png())
 
-rs118_df <- ratio_merge %>%
+rs118_df <- merged_ratio %>%
   select(c(refname:config, ratio1:ratio5)) %>%
   filter(rsid == "rs11819995" & site == "right") %>%
   pivot_longer(!c(refname:config)) %>%
